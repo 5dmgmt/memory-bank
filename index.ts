@@ -109,11 +109,11 @@ export default async function activate(api: OpenClawPluginApi, _config?: PluginC
   if (config.autoRecall) {
     const minLength = config.autoRecallMinLength ?? 10;
 
-    api.on("before_agent_start", async (context: any) => {
-      const prompt = context?.prompt || context?.message?.text || "";
+    api.on("before_agent_start", async (event: any, ctx: any) => {
+      const prompt = event?.prompt || "";
       if (typeof prompt !== "string" || prompt.trim().length < minLength) return;
 
-      const agentId = context?.agentId;
+      const agentId = ctx?.agentId;
       const scope = scopeManager.resolve(agentId);
 
       try {
@@ -123,11 +123,9 @@ export default async function activate(api: OpenClawPluginApi, _config?: PluginC
             .map((r) => `- [${r.entry.category}] ${r.entry.text}`)
             .join("\n");
 
-          context.systemMessage = [
-            context.systemMessage || "",
-            "\n\n## 関連する長期記憶\n",
-            memories,
-          ].join("");
+          return {
+            prependContext: `\n\n## 関連する長期記憶（Memory Bank）\n${memories}\n`,
+          };
         }
       } catch (err) {
         // 自動想起の失敗はサイレントに — エージェントの動作を止めない
@@ -137,9 +135,9 @@ export default async function activate(api: OpenClawPluginApi, _config?: PluginC
 
   // 7. 自動キャプチャ — エージェント終了時にユーザー発言を記憶
   if (config.autoCapture) {
-    api.on("agent_end", async (context: any) => {
-      const messages = context?.messages || [];
-      const agentId = context?.agentId;
+    api.on("agent_end", async (event: any, ctx: any) => {
+      const messages = event?.messages || [];
+      const agentId = ctx?.agentId;
 
       for (const msg of messages) {
         if (msg.role !== "user") continue;
@@ -171,11 +169,11 @@ export default async function activate(api: OpenClawPluginApi, _config?: PluginC
   };
 
   if (reflectionConfig.enabled) {
-    api.on("agent_end", async (context: any) => {
-      const messages = context?.messages || [];
+    api.on("agent_end", async (event: any, ctx: any) => {
+      const messages = event?.messages || [];
       if (messages.length < 3) return; // 短すぎるセッションはスキップ
 
-      const agentId = context?.agentId;
+      const agentId = ctx?.agentId;
 
       try {
         const lastMessages = messages.slice(-reflectionConfig.maxMessages);

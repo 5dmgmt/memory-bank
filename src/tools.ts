@@ -1,6 +1,9 @@
 /**
  * エージェントツール登録
  * OpenClaw の registerTool API を通じて LLM に公開するメモリ操作ツール
+ *
+ * initPromise パターン: activate が同期のため、
+ * ツールの execute 内で await initPromise してから deps を使う
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -17,6 +20,12 @@ interface ToolDeps {
   embedder: Embedder;
   scopeManager: ScopeManager;
   agentId?: string;
+}
+
+interface LazyToolDeps {
+  initPromise: Promise<{ store: MemoryStore; retriever: MemoryRetriever; embedder: Embedder; scopeManager: ScopeManager }>;
+  embedder: Embedder;
+  scopeManager: ScopeManager;
 }
 
 /**
@@ -46,7 +55,15 @@ function formatResults(results: RetrievalResult[]) {
 /**
  * 基本メモリツールを登録
  */
-export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void {
+export function registerCoreTools(api: OpenClawPluginApi, lazyDeps: ToolDeps | LazyToolDeps): void {
+  // initPromise があれば遅延パターン、なければ直接参照
+  const getDeps = "initPromise" in lazyDeps
+    ? async (ctx?: any) => {
+        const resolved = await (lazyDeps as LazyToolDeps).initPromise;
+        return { ...resolved, agentId: ctx?.agentId } as ToolDeps;
+      }
+    : async (ctx?: any) => ({ ...(lazyDeps as ToolDeps), agentId: ctx?.agentId || (lazyDeps as ToolDeps).agentId });
+
   // memory_store — 記憶を保存
   api.registerTool({
     name: "memory_store",
@@ -77,7 +94,8 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
       },
       required: ["text", "category"],
     },
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: any, ctx?: any) {
+      const deps = await getDeps(ctx);
       const text = String(params.text || "").trim();
       if (!text || text.length < 3) {
         return toolResult({ error: "テキストが短すぎます（最低3文字）" });
@@ -133,7 +151,8 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
       },
       required: ["query"],
     },
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: any, ctx?: any) {
+      const deps = await getDeps(ctx);
       const query = String(params.query || "").trim();
       if (!query) return toolResult({ error: "検索クエリが空です" });
 
@@ -166,7 +185,8 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
       },
       required: ["id"],
     },
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: any, ctx?: any) {
+      const deps = await getDeps(ctx);
       const id = String(params.id || "").trim();
       if (!id) return toolResult({ error: "IDが指定されていません" });
       const deleted = await deps.store.remove(id);
@@ -203,14 +223,14 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
       },
       required: ["id"],
     },
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: any, ctx?: any) {
+      const deps = await getDeps(ctx);
       const id = String(params.id || "").trim();
       if (!id) return toolResult({ error: "IDが指定されていません" });
 
       const fields: any = {};
       if (params.text) {
         fields.text = String(params.text);
-        // テキスト変更時はベクトルも再生成（F-11修正）
         fields.vector = await deps.embedder.embed(fields.text, "store");
       }
       if (params.category && CATEGORIES.includes(params.category)) {
@@ -229,7 +249,11 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
 /**
  * 管理ツールを登録（enableManagementTools=true の場合のみ）
  */
-export function registerManagementTools(api: OpenClawPluginApi, deps: ToolDeps): void {
+export function registerManagementTools(api: OpenClawPluginApi, lazyDeps: ToolDeps | LazyToolDeps): void {
+  const getDeps = "initPromise" in lazyDeps
+    ? async () => { const r = await (lazyDeps as LazyToolDeps).initPromise; return r; }
+    : async () => lazyDeps as ToolDeps;
+
   // memory_list — 全記憶一覧
   api.registerTool({
     name: "memory_list",
@@ -242,11 +266,13 @@ export function registerManagementTools(api: OpenClawPluginApi, deps: ToolDeps):
         offset: { type: "integer", minimum: 0, description: "オフセット" },
       },
     },
-    async execute(_id: string, params: any) {
-      const scope = deps.scopeManager.resolve(deps.agentId, params.scope);
+    async execute(_id: string, params: any, ctx?: any) {
+      const deps = await getDeps();
+      const agentId = ctx?.agentId;
+      const scope = deps.scopeManager.resolve(agentId, params.scope);
 
-      if (deps.agentId && !deps.scopeManager.canAccess(deps.agentId, scope)) {
-        return toolResult({ error: `アクセス拒否: エージェント "${deps.agentId}" はスコープ "${scope}" にアクセスできません` });
+      if (agentId && !deps.scopeManager.canAccess(agentId, scope)) {
+        return toolResult({ error: `アクセス拒否` });
       }
 
       const limit = clampNumber(params.limit ?? 10, 1, 50, 10);
@@ -277,6 +303,7 @@ export function registerManagementTools(api: OpenClawPluginApi, deps: ToolDeps):
       },
     },
     async execute(_id: string, params: any) {
+      const deps = await getDeps();
       const total = await deps.store.count();
       const scopeCount = params.scope
         ? await deps.store.count(params.scope)

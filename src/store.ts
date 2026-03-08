@@ -161,11 +161,12 @@ export async function createStore(dbPath: string, vectorDim: number): Promise<Me
     },
 
     async searchFullText(query, scope, limit) {
-      // LanceDBのフルテキスト検索（利用可能な場合）
-      // フォールバック: 全件取得してJSでフィルタリング
+      // LanceDB fullTextSearch API（query().fullTextSearch() を使用）
+      // .search(query, "text") は embedding function が必要でエラーになる
       try {
         const results = await table
-          .search(query, "text")
+          .query()
+          .fullTextSearch(query)
           .where(`scope = '${sqlEscape(scope)}' AND id != '__seed__'`)
           .limit(limit)
           .toArray();

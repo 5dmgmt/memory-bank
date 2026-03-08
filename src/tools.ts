@@ -90,7 +90,11 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
       const importance = clampNumber(params.importance ?? 0.7, 0, 1, 0.7);
       const scope = deps.scopeManager.resolve(deps.agentId, params.scope);
 
-      const vector = await deps.embedder.embed(text);
+      if (deps.agentId && !deps.scopeManager.canAccess(deps.agentId, scope)) {
+        return toolResult({ error: `アクセス拒否: エージェント "${deps.agentId}" はスコープ "${scope}" にアクセスできません` });
+      }
+
+      const vector = await deps.embedder.embed(text, "store");
       const id = await deps.store.add({
         text,
         vector,
@@ -135,6 +139,10 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
 
       const limit = clampNumber(params.limit ?? 5, 1, 20, 5);
       const scope = deps.scopeManager.resolve(deps.agentId, params.scope);
+
+      if (deps.agentId && !deps.scopeManager.canAccess(deps.agentId, scope)) {
+        return toolResult({ error: `アクセス拒否: エージェント "${deps.agentId}" はスコープ "${scope}" にアクセスできません` });
+      }
 
       const results = await deps.retriever.recall(query, scope, limit);
       return toolResult({
@@ -203,7 +211,7 @@ export function registerCoreTools(api: OpenClawPluginApi, deps: ToolDeps): void 
       if (params.text) {
         fields.text = String(params.text);
         // テキスト変更時はベクトルも再生成（F-11修正）
-        fields.vector = await deps.embedder.embed(fields.text);
+        fields.vector = await deps.embedder.embed(fields.text, "store");
       }
       if (params.category && CATEGORIES.includes(params.category)) {
         fields.category = params.category;
@@ -236,6 +244,11 @@ export function registerManagementTools(api: OpenClawPluginApi, deps: ToolDeps):
     },
     async execute(_id: string, params: any) {
       const scope = deps.scopeManager.resolve(deps.agentId, params.scope);
+
+      if (deps.agentId && !deps.scopeManager.canAccess(deps.agentId, scope)) {
+        return toolResult({ error: `アクセス拒否: エージェント "${deps.agentId}" はスコープ "${scope}" にアクセスできません` });
+      }
+
       const limit = clampNumber(params.limit ?? 10, 1, 50, 10);
       const offset = clampNumber(params.offset ?? 0, 0, 10000, 0);
       const entries = await deps.store.listAll(scope, limit, offset);

@@ -10,11 +10,13 @@ export interface ScopeDefinition {
 export interface ScopeConfig {
   defaultScope: string;
   definitions: Record<string, ScopeDefinition>;
+  agentAccess?: Record<string, string[]>;
 }
 
 export interface ScopeManager {
   resolve(agentId?: string, userScope?: string): string;
   isValid(scope: string): boolean;
+  canAccess(agentId: string, scope: string): boolean;
   listScopes(): string[];
   defaultScope: string;
 }
@@ -33,6 +35,7 @@ export function createScopeManager(config?: Partial<ScopeConfig>): ScopeManager 
     ...BUILT_IN_SCOPES,
     ...(config?.definitions || {}),
   };
+  const agentAccess: Record<string, string[]> | undefined = config?.agentAccess;
 
   return {
     defaultScope,
@@ -46,8 +49,21 @@ export function createScopeManager(config?: Partial<ScopeConfig>): ScopeManager 
     },
 
     isValid(scope: string): boolean {
-      // 定義済みスコープまたは agent: プレフィックス
-      return scope in definitions || scope.startsWith("agent:");
+      // 定義済みスコープ、または動的プレフィックス (agent:, project:, user:)
+      if (scope in definitions) return true;
+      if (scope.startsWith("agent:") || scope.startsWith("project:") || scope.startsWith("user:")) {
+        return true;
+      }
+      return false;
+    },
+
+    canAccess(agentId: string, scope: string): boolean {
+      // agentAccess 未設定、または当該エージェントの制限が未定義なら全許可
+      if (!agentAccess || !(agentId in agentAccess)) return true;
+      const allowed = agentAccess[agentId];
+      // ワイルドカード
+      if (allowed.includes("*")) return true;
+      return allowed.includes(scope);
     },
 
     listScopes(): string[] {

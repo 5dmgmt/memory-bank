@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { lengthNorm, cosineSimilarity, applyMMR } from "../src/retriever.ts";
-import type { RetrievalResult } from "../src/retriever.ts";
+import { lengthNorm, cosineSimilarity, applyMMR, adaptConfig, DEFAULT_CONFIG } from "../src/retriever.ts";
+import type { RetrievalResult, RetrievalConfig } from "../src/retriever.ts";
 import type { MemoryEntry } from "../src/store.ts";
 
 // テスト用ヘルパー: ダミーの RetrievalResult を生成
@@ -160,5 +160,66 @@ describe("lengthNorm integration", () => {
     // アンカーの10倍でも 0.2 以上はある
     const norm = lengthNorm(3000, 300);
     assert.ok(norm > 0.2, `expected > 0.2, got ${norm}`);
+  });
+});
+
+// ========================================================================
+// Adaptive Retrieval
+// ========================================================================
+describe("adaptConfig", () => {
+  it("短いクエリ（< 20文字）でBM25重視・候補プール拡大", () => {
+    const result = adaptConfig(DEFAULT_CONFIG, 10);
+    assert.ok(result.bm25Weight > DEFAULT_CONFIG.bm25Weight, "bm25Weight should increase");
+    assert.ok(result.vectorWeight < DEFAULT_CONFIG.vectorWeight, "vectorWeight should decrease");
+    assert.ok(result.candidatePoolSize > DEFAULT_CONFIG.candidatePoolSize, "candidatePoolSize should increase");
+    // minScore は変わらない
+    assert.equal(result.minScore, DEFAULT_CONFIG.minScore);
+  });
+
+  it("長いクエリ（> 100文字）でベクトル重視・minScore緩和", () => {
+    const longQuery = 150;
+    const result = adaptConfig(DEFAULT_CONFIG, longQuery);
+    assert.ok(result.vectorWeight > DEFAULT_CONFIG.vectorWeight, "vectorWeight should increase");
+    assert.ok(result.bm25Weight < DEFAULT_CONFIG.bm25Weight, "bm25Weight should decrease");
+    assert.ok(result.minScore < DEFAULT_CONFIG.minScore, "minScore should decrease");
+    // candidatePoolSize は変わらない
+    assert.equal(result.candidatePoolSize, DEFAULT_CONFIG.candidatePoolSize);
+  });
+
+  it("中程度のクエリ（20-100文字）でデフォルトのまま", () => {
+    const result = adaptConfig(DEFAULT_CONFIG, 50);
+    assert.equal(result.vectorWeight, DEFAULT_CONFIG.vectorWeight);
+    assert.equal(result.bm25Weight, DEFAULT_CONFIG.bm25Weight);
+    assert.equal(result.minScore, DEFAULT_CONFIG.minScore);
+    assert.equal(result.candidatePoolSize, DEFAULT_CONFIG.candidatePoolSize);
+  });
+
+  it("adaptive: false で調整なし", () => {
+    const configOff: RetrievalConfig = { ...DEFAULT_CONFIG, adaptive: false };
+    const shortResult = adaptConfig(configOff, 5);
+    assert.equal(shortResult.vectorWeight, DEFAULT_CONFIG.vectorWeight);
+    assert.equal(shortResult.bm25Weight, DEFAULT_CONFIG.bm25Weight);
+
+    const longResult = adaptConfig(configOff, 200);
+    assert.equal(longResult.vectorWeight, DEFAULT_CONFIG.vectorWeight);
+    assert.equal(longResult.minScore, DEFAULT_CONFIG.minScore);
+  });
+
+  it("重みが 0 未満や 1 超過にならない", () => {
+    // bm25Weight が非常に小さい場合
+    const lowBm25: RetrievalConfig = { ...DEFAULT_CONFIG, bm25Weight: 0.05 };
+    const longResult = adaptConfig(lowBm25, 150);
+    assert.ok(longResult.bm25Weight >= 0, "bm25Weight should not go below 0");
+
+    // vectorWeight が非常に小さい場合
+    const lowVector: RetrievalConfig = { ...DEFAULT_CONFIG, vectorWeight: 0.1 };
+    const shortResult = adaptConfig(lowVector, 5);
+    assert.ok(shortResult.vectorWeight >= 0, "vectorWeight should not go below 0");
+  });
+
+  it("minScore が過度に低下しない", () => {
+    const lowMinScore: RetrievalConfig = { ...DEFAULT_CONFIG, minScore: 0.08 };
+    const result = adaptConfig(lowMinScore, 150);
+    assert.ok(result.minScore >= 0.05, `minScore floor should be 0.05, got ${result.minScore}`);
   });
 });

@@ -24,6 +24,8 @@ export interface RetrievalConfig {
   mmrLambda: number;
   /** length normalization のアンカー文字数 (デフォルト: 300, 0で無効) */
   lengthNormAnchor: number;
+  /** クエリ長に応じて検索パラメータを自動調整 (デフォルト: true) */
+  adaptive: boolean;
 }
 
 export interface RetrievalResult {
@@ -46,6 +48,7 @@ export const DEFAULT_CONFIG: RetrievalConfig = {
   decayHalfLifeDays: 60,
   mmrLambda: 0.7,
   lengthNormAnchor: 300,
+  adaptive: true,
 };
 
 /**
@@ -214,6 +217,42 @@ export interface MemoryRetriever {
 }
 
 /**
+ * Adaptive Retrieval — クエリの長さに応じて検索パラメータを動的調整
+ * 短いキーワード: BM25重視、候補プール拡大
+ * 中程度: デフォルトバランス
+ * 長い自然文: ベクトル重視、minScore緩和
+ */
+export function adaptConfig(
+  base: RetrievalConfig,
+  queryLength: number,
+): RetrievalConfig {
+  if (!base.adaptive) return base;
+
+  if (queryLength < 20) {
+    // 短いキーワード — BM25が得意な領域
+    return {
+      ...base,
+      vectorWeight: Math.max(base.vectorWeight - 0.2, 0),
+      bm25Weight: Math.min(base.bm25Weight + 0.2, 1),
+      candidatePoolSize: Math.round(base.candidatePoolSize * 1.5),
+    };
+  }
+
+  if (queryLength > 100) {
+    // 長い自然文 — ベクトル検索が得意な領域
+    return {
+      ...base,
+      vectorWeight: Math.min(base.vectorWeight + 0.15, 1),
+      bm25Weight: Math.max(base.bm25Weight - 0.15, 0),
+      minScore: Math.max(base.minScore - 0.1, 0.05),
+    };
+  }
+
+  // 中程度 — デフォルトバランスのまま
+  return base;
+}
+
+/**
  * Retriever を生成
  */
 export function createRetriever(
@@ -225,7 +264,9 @@ export function createRetriever(
 
   return {
     async recall(query: string, scope: string, limit: number): Promise<RetrievalResult[]> {
-      const poolSize = config.candidatePoolSize;
+      // Adaptive Retrieval: クエリ長に応じたパラメータ調整
+      const effective = adaptConfig(config, query.length);
+      const poolSize = effective.candidatePoolSize;
 
       // 1. ベクトル検索
       const queryVector = await embedder.embed(query);
@@ -241,7 +282,7 @@ export function createRetriever(
 
       let fusedScores: Map<string, number>;
 
-      if (config.mode === "hybrid") {
+      if (effective.mode === "hybrid") {
         // 2. BM25 フルテキスト検索
         const textHits = await store.searchFullText(query, scope, poolSize);
         textHits.forEach((h) => entryMap.set(h.entry.id, h.entry));
@@ -252,7 +293,7 @@ export function createRetriever(
         // 3. RRF 融合
         fusedScores = computeRRF(
           [vectorRanking, bm25Ranking],
-          [config.vectorWeight, config.bm25Weight],
+          [effective.vectorWeight, effective.bm25Weight],
         );
       } else {
         // ベクトルのみ
@@ -270,20 +311,20 @@ export function createRetriever(
         if (!entry) continue;
 
         // 時間減衰
-        const decay = timeDecay(entry.timestamp, config.decayHalfLifeDays);
+        const decay = timeDecay(entry.timestamp, effective.decayHalfLifeDays);
         // 近時ブースト
-        const boost = recencyBoost(entry.timestamp, config.recencyBoostDays, config.recencyBoostMax);
+        const boost = recencyBoost(entry.timestamp, effective.recencyBoostDays, effective.recencyBoostMax);
         // 重要度ボーナス
         const importanceBonus = (entry.importance - 0.5) * 0.05;
         // Length normalization
-        const lenNorm = lengthNorm(entry.text.length, config.lengthNormAnchor);
+        const lenNorm = lengthNorm(entry.text.length, effective.lengthNormAnchor);
 
         const finalScore = rawScore * decay * lenNorm + boost + importanceBonus;
 
-        if (finalScore >= config.minScore) {
+        if (finalScore >= effective.minScore) {
           const sources: string[] = [];
           if (vectorRanking.has(id)) sources.push("vector");
-          if (config.mode === "hybrid") sources.push("bm25");
+          if (effective.mode === "hybrid") sources.push("bm25");
 
           results.push({ entry, score: finalScore, sources });
         }
@@ -293,13 +334,13 @@ export function createRetriever(
       results.sort((a, b) => b.score - a.score);
 
       // 6. オプション: Cross-Encoder リランキング
-      if (config.rerank === "cross-encoder" && config.rerankApiKey) {
-        results = await rerankWithCrossEncoder(query, results.slice(0, poolSize), config);
+      if (effective.rerank === "cross-encoder" && effective.rerankApiKey) {
+        results = await rerankWithCrossEncoder(query, results.slice(0, poolSize), effective);
       }
 
       // 7. MMR — 多様性制御（リランキング後に適用）
-      if (config.mmrLambda < 1) {
-        results = applyMMR(results, limit, config.mmrLambda);
+      if (effective.mmrLambda < 1) {
+        results = applyMMR(results, limit, effective.mmrLambda);
       } else {
         results = results.slice(0, limit);
       }

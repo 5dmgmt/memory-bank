@@ -31,6 +31,11 @@
             "type": "integer",
             "minimum": 1,
             "description": "ベクトル次元数（未指定時は自動検出）"
+          },
+          "taskAware": {
+            "type": "boolean",
+            "default": true,
+            "description": "Task-Aware Embeddings: 保存用と検索用で前処理を分離（nomic, mxbai等のモデルで効果的）"
           }
         },
         "required": ["apiKey"]
@@ -136,6 +141,11 @@
             "minimum": 0,
             "default": 300,
             "description": "Length normalizationのアンカー文字数。これより長い記憶はスコアが減衰。0で無効"
+          },
+          "adaptive": {
+            "type": "boolean",
+            "default": true,
+            "description": "クエリ長に応じて検索パラメータを自動調整。短いキーワードはBM25重視、長い文はベクトル重視"
           }
         }
       },
@@ -176,6 +186,14 @@
                 "description": { "type": "string" }
               }
             }
+          },
+          "agentAccess": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "description": "エージェントごとのアクセス可能スコープ一覧。未設定のエージェントは全スコープにアクセス可。ワイルドカード '*' で全許可"
           }
         }
       },
@@ -201,6 +219,11 @@
     "embedding.baseURL": {
       "label": "ベースURL",
       "placeholder": "https://api.openai.com/v1",
+      "advanced": true
+    },
+    "embedding.taskAware": {
+      "label": "Task-Aware Embeddings",
+      "help": "保存時と検索時で異なるプレフィックスを付与。nomic-embed-text, mxbai-embed-large等で検索精度向上",
       "advanced": true
     },
     "dbPath": {

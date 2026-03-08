@@ -14,7 +14,7 @@ import { createStore } from "./src/store.js";
 import { createRetriever } from "./src/retriever.js";
 import { createScopeManager } from "./src/scopes.js";
 import { registerCoreTools, registerManagementTools } from "./src/tools.js";
-import { DEFAULT_REFLECTION_CONFIG } from "./src/reflection.js";
+import { DEFAULT_REFLECTION_CONFIG, extractLessons, parseReflectionOutput } from "./src/reflection.js";
 import { isNoise } from "./src/noise-filter.js";
 
 // プラグイン設定の型
@@ -24,6 +24,7 @@ interface PluginConfig {
     model?: string;
     baseURL?: string;
     dimensions?: number;
+    taskAware?: boolean;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -44,6 +45,7 @@ interface PluginConfig {
     decayHalfLifeDays?: number;
     mmrLambda?: number;
     lengthNormAnchor?: number;
+    adaptive?: boolean;
   };
   reflection?: {
     enabled?: boolean;
@@ -53,6 +55,7 @@ interface PluginConfig {
   scopes?: {
     defaultScope?: string;
     definitions?: Record<string, { description?: string }>;
+    agentAccess?: Record<string, string[]>;
   };
   enableManagementTools?: boolean;
 }
@@ -141,7 +144,7 @@ export default async function activate(api: OpenClawPluginApi, config: PluginCon
 
         const scope = scopeManager.resolve(agentId);
         try {
-          const vector = await embedder.embed(text);
+          const vector = await embedder.embed(text, "store");
           await store.add({
             text: text.slice(0, 500),
             vector,
@@ -183,7 +186,7 @@ export default async function activate(api: OpenClawPluginApi, config: PluginCon
 
         if (conversationSummary.length > 50) {
           const scope = scopeManager.resolve(agentId);
-          const vector = await embedder.embed(conversationSummary.slice(0, 1000));
+          const vector = await embedder.embed(conversationSummary.slice(0, 1000), "store");
           await store.add({
             text: `[Session Summary] ${conversationSummary.slice(0, 500)}`,
             vector,
@@ -196,6 +199,23 @@ export default async function activate(api: OpenClawPluginApi, config: PluginCon
               messageCount: messages.length,
             }),
           });
+
+          // 教訓抽出: セッション要約テキストから parseReflectionOutput で候補を取得し、重複チェック付きで保存
+          // 注: 実際の LLM 呼び出しは agent_end コンテキストで行えないため、
+          // conversationSummary をそのまま parseReflectionOutput に渡す
+          // （LLM が LESSON_PROMPT に従って出力した JSON がメッセージ内にある場合に抽出される）
+          const lastAssistantMsg = lastMessages
+            .filter((m: any) => m.role === "assistant")
+            .pop();
+          const assistantText = lastAssistantMsg
+            ? String(lastAssistantMsg.content || "")
+            : "";
+          if (assistantText.length > 0) {
+            const lessonCandidates = parseReflectionOutput(assistantText);
+            if (lessonCandidates.length > 0) {
+              await extractLessons(lessonCandidates, embedder, store, scope, agentId);
+            }
+          }
         }
       } catch (e) {
         console.warn("[memory-bank] Reflection failed:", e);

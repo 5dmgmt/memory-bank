@@ -4,6 +4,9 @@
   "description": "OpenClaw 長期記憶プラグイン — ハイブリッド検索、スコープ分離、時間減衰、リフレクション",
   "type": "module",
   "main": "index.ts",
+  "bin": {
+    "memory-bank": "./cli.ts"
+  },
   "keywords": [
     "openclaw",
     "openclaw-plugin",
@@ -33,6 +36,7 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "test": "node --import jiti/register --test test/*.test.ts"
+    "test": "node --import jiti/register --test test/*.test.ts",
+    "cli": "node --import jiti/register cli.ts"
   }
 }

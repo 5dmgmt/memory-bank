@@ -262,8 +262,15 @@ export async function createStore(dbPath: string, vectorDim: number): Promise<Me
     async update(id, fields) {
       const existing = await this.getById(id);
       if (!existing) return false;
-      const updated = { ...existing, ...fields };
-      await table.update({ where: `id = '${sqlEscape(id)}'`, values: updated });
+      // 部分更新: 変更フィールドのみ渡す（read-modify-write の競合リスクを軽減）
+      // LanceDB の update は where マッチした行の指定フィールドを上書き
+      const updateValues: Record<string, any> = {};
+      if (fields.text !== undefined) updateValues.text = fields.text;
+      if (fields.vector !== undefined) updateValues.vector = fields.vector;
+      if (fields.category !== undefined) updateValues.category = fields.category;
+      if (fields.importance !== undefined) updateValues.importance = fields.importance;
+      if (fields.metadata !== undefined) updateValues.metadata = fields.metadata;
+      await table.update({ where: `id = '${sqlEscape(id)}'`, values: updateValues });
       return true;
     },
   };

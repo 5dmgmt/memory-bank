@@ -11,6 +11,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { homedir } from "node:os";
 import { join, resolve, relative } from "node:path";
+import { realpathSync, existsSync } from "node:fs";
 
 import { createEmbedder } from "./src/embedder.js";
 import { createStore } from "./src/store.js";
@@ -80,13 +81,31 @@ function expandPath(p: string): string {
   }
   // 正規化してトラバーサルを解決
   const resolved = resolve(expanded);
-  // ホームディレクトリ配下のみ許可（prefix 比較ではなく relative で判定）
   const home = homedir();
+
+  // 論理パスの検証（relative で判定）
   const rel = relative(home, resolved);
-  // relative が ".." で始まるか、絶対パスになる場合はホーム外
   if (rel.startsWith("..") || resolve(home, rel) !== resolved) {
     throw new Error(`memory-bank: dbPath はホームディレクトリ配下のみ指定可能です: ${resolved}`);
   }
+
+  // symlink 対策: 既存パスの実体パスがホーム配下か検証
+  // 親ディレクトリを遡って存在する最深のパスを realpath で検証
+  let checkPath = resolved;
+  while (!existsSync(checkPath)) {
+    const parent = resolve(checkPath, "..");
+    if (parent === checkPath) break; // ルートに到達
+    checkPath = parent;
+  }
+  if (existsSync(checkPath)) {
+    const realHome = realpathSync(home);
+    const realCheck = realpathSync(checkPath);
+    const realRel = relative(realHome, realCheck);
+    if (realRel.startsWith("..") || resolve(realHome, realRel) !== realCheck) {
+      throw new Error(`memory-bank: dbPath の実体パスがホームディレクトリ外を指しています: ${realCheck}`);
+    }
+  }
+
   return resolved;
 }
 

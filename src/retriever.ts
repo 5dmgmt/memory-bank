@@ -6,7 +6,7 @@
 
 import type { MemoryStore, SearchHit, MemoryEntry } from "./store.js";
 import type { Embedder } from "./embedder.js";
-import { validateEndpointURL } from "./embedder.js";
+import { validateEndpointURL, validateEndpointDNS } from "./embedder.js";
 
 export interface RetrievalConfig {
   mode: "hybrid" | "vector";
@@ -199,6 +199,9 @@ async function rerankWithCrossEncoder(
   config: RetrievalConfig,
 ): Promise<RetrievalResult[]> {
   if (!config.rerankApiKey || candidates.length === 0) return candidates;
+
+  // DNS 解決ベースの SSRF 検証
+  await validateEndpointDNS(config.rerankEndpoint, "retrieval.rerankEndpoint");
 
   // 全文ではなくスニペットのみ送信（機密情報マスキング済み）
   const documents = candidates.map((c) => sanitizeForRerank(c.entry.text));

@@ -6,10 +6,8 @@
 
 import OpenAI from "openai";
 import { createHash } from "node:crypto";
+import { lookup } from "node:dns/promises";
 
-/**
- * SSRF防止: URL がプライベートネットワークを指していないか検証
- */
 /**
  * ホスト名が localhost 系かどうかを判定
  */
@@ -18,14 +16,33 @@ function isLocalhost(hostname: string): boolean {
 }
 
 /**
- * SSRF防止: URL がプライベートネットワークを指していないか検証
+ * IP アドレスがプライベート/予約済みかどうか判定
+ */
+function isPrivateIP(ip: string): boolean {
+  const patterns = [
+    /^169\.254\./,                      // リンクローカル（AWS/GCP メタデータ）
+    /^10\./,                            // RFC1918
+    /^172\.(1[6-9]|2\d|3[01])\./,      // RFC1918
+    /^192\.168\./,                      // RFC1918
+    /^127\./,                           // loopback 全域
+    /^0\./,                             // 0.0.0.0/8
+    /^::1$/,                            // IPv6 loopback
+    /^fe80:/i,                          // IPv6 リンクローカル
+    /^::ffff:(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.)/i,  // IPv6-mapped private IPv4
+    /^fc00:/i,                          // IPv6 ユニークローカル
+    /^fd/i,                             // IPv6 ユニークローカル
+  ];
+  return patterns.some((p) => p.test(ip));
+}
+
+/**
+ * SSRF防止: URL の同期バリデーション（ホスト名文字列チェック）
  *
  * 戦略:
- * - localhost は Ollama 等ローカル用途で許可（明示的 opt-in）
- * - プライベート IP（RFC1918, リンクローカル, メタデータ）をブロック
- * - DNS rebinding 対策: *.nip.io, *.sslip.io 等の wildcard DNS をブロック
- * - IPv6-mapped IPv4（::ffff:127.0.0.1 等）をブロック
- * - スキーマ制限: http/https のみ許可
+ * - localhost は Ollama 等ローカル用途で許可
+ * - 既知の wildcard DNS サービスをブロック
+ * - IP リテラルがプライベートならブロック
+ * - スキーマ制限: http/https のみ
  */
 export function validateEndpointURL(url: string, label: string): void {
   let parsed: URL;
@@ -47,12 +64,8 @@ export function validateEndpointURL(url: string, label: string): void {
 
   // Wildcard DNS サービスをブロック（DNS rebinding 対策）
   const wildcardDnsPatterns = [
-    /\.nip\.io$/,
-    /\.sslip\.io$/,
-    /\.xip\.io$/,
-    /\.lvh\.me$/,
-    /\.localtest\.me$/,
-    /\.vcap\.me$/,
+    /\.nip\.io$/, /\.sslip\.io$/, /\.xip\.io$/,
+    /\.lvh\.me$/, /\.localtest\.me$/, /\.vcap\.me$/,
   ];
   for (const pattern of wildcardDnsPatterns) {
     if (pattern.test(hostname)) {
@@ -60,25 +73,44 @@ export function validateEndpointURL(url: string, label: string): void {
     }
   }
 
-  // プライベート/メタデータ IP をブロック
-  const blocked = [
-    /^169\.254\./,                      // リンクローカル（AWS/GCP メタデータ）
-    /^10\./,                            // RFC1918
-    /^172\.(1[6-9]|2\d|3[01])\./,      // RFC1918
-    /^192\.168\./,                      // RFC1918
-    /^127\./,                           // loopback 全域
-    /^0\./,                             // 0.0.0.0/8
-    /^\[?::1\]?$/,                      // IPv6 loopback
-    /^\[?fe80:/i,                       // IPv6 リンクローカル
-    /^\[?::ffff:/i,                     // IPv6-mapped IPv4
-    /^\[?fc00:/i,                       // IPv6 ユニークローカル
-    /^\[?fd/i,                          // IPv6 ユニークローカル
-    /^metadata\.google\.internal$/i,    // GCP メタデータ
-  ];
-  for (const pattern of blocked) {
-    if (pattern.test(hostname)) {
-      throw new Error(`memory-bank: ${label} にプライベートアドレスは指定できません: ${hostname}`);
+  // IP リテラルがプライベートならブロック
+  if (isPrivateIP(hostname) || isPrivateIP(hostname.replace(/^\[|\]$/g, ""))) {
+    throw new Error(`memory-bank: ${label} にプライベートアドレスは指定できません: ${hostname}`);
+  }
+
+  // クラウドメタデータ
+  if (/^metadata\.google\.internal$/i.test(hostname)) {
+    throw new Error(`memory-bank: ${label} にメタデータエンドポイントは指定できません: ${hostname}`);
+  }
+}
+
+/**
+ * SSRF防止: DNS 解決後の実 IP アドレスを検証（非同期）
+ * 攻撃者管理ドメインが private IP に解決されるケースを防ぐ
+ */
+export async function validateEndpointDNS(url: string, label: string): Promise<void> {
+  const parsed = new URL(url);
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+
+  // localhost は許可済み
+  if (isLocalhost(hostname)) return;
+
+  // IP リテラルは同期チェック済み
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname) || hostname.includes(":")) return;
+
+  try {
+    const addresses = await lookup(hostname, { all: true });
+    for (const addr of addresses) {
+      if (isPrivateIP(addr.address)) {
+        throw new Error(
+          `memory-bank: ${label} のホスト "${hostname}" がプライベート IP (${addr.address}) に解決されました。SSRF 防止のためブロックします。`,
+        );
+      }
     }
+  } catch (err: any) {
+    // DNS 解決自体の失敗はそのまま throw（ネットワークエラー）
+    if (err?.message?.includes("SSRF")) throw err;
+    // DNS 解決不能はブロックしない（後続の API 呼び出しで自然にエラーになる）
   }
 }
 
@@ -198,7 +230,16 @@ export function createEmbedder(config: EmbedderConfig): Embedder {
   const cache = new VectorCache();
   const taskAwareEnabled = config.taskAware !== false; // デフォルト true
 
+  // DNS 解決ベースの SSRF 検証（初回 API 呼び出し前に1回だけ実行）
+  let dnsChecked = false;
+  async function ensureDNSSafe(): Promise<void> {
+    if (dnsChecked) return;
+    dnsChecked = true;
+    await validateEndpointDNS(baseURL, "embedding.baseURL");
+  }
+
   async function callApi(texts: string[]): Promise<number[][]> {
+    await ensureDNSSafe();
     const response = await client.embeddings.create({
       model,
       input: texts,

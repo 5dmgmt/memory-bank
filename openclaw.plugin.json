@@ -1,0 +1,221 @@
+{
+  "id": "memory-bank",
+  "name": "Memory Bank",
+  "description": "長期記憶プラグイン — ハイブリッド検索（Vector + BM25）、スコープ分離、時間減衰、リフレクション機能付き",
+  "version": "0.1.0",
+  "kind": "memory",
+  "skills": ["skills/lesson"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Embedding API キー（または ${ENV_VAR} 形式）"
+          },
+          "model": {
+            "type": "string",
+            "default": "text-embedding-3-small",
+            "description": "埋め込みモデル名"
+          },
+          "baseURL": {
+            "type": "string",
+            "description": "OpenAI互換エンドポイントURL（Ollama, Gemini等）"
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "ベクトル次元数（未指定時は自動検出）"
+          }
+        },
+        "required": ["apiKey"]
+      },
+      "dbPath": {
+        "type": "string",
+        "description": "LanceDBデータベースのパス",
+        "default": "~/.openclaw/memory/memory-bank"
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": false,
+        "description": "会話から自動的に重要情報を保存"
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "default": false,
+        "description": "関連する記憶を自動的にコンテキストに注入"
+      },
+      "autoRecallMinLength": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 10,
+        "description": "自動想起のトリガーとなる最小プロンプト長"
+      },
+      "retrieval": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["hybrid", "vector"],
+            "default": "hybrid"
+          },
+          "vectorWeight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.7
+          },
+          "bm25Weight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.3
+          },
+          "minScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.3
+          },
+          "rerank": {
+            "type": "string",
+            "enum": ["cross-encoder", "none"],
+            "default": "none"
+          },
+          "rerankApiKey": {
+            "type": "string",
+            "description": "リランカーAPIキー"
+          },
+          "rerankModel": {
+            "type": "string",
+            "default": "jina-reranker-v2-base-multilingual"
+          },
+          "rerankEndpoint": {
+            "type": "string",
+            "default": "https://api.jina.ai/v1/rerank"
+          },
+          "candidatePoolSize": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 100,
+            "default": 20
+          },
+          "recencyBoostDays": {
+            "type": "number",
+            "minimum": 0,
+            "default": 14,
+            "description": "近時ブーストの半減期（日数）"
+          },
+          "recencyBoostMax": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.5,
+            "default": 0.1
+          },
+          "decayHalfLifeDays": {
+            "type": "number",
+            "minimum": 0,
+            "default": 60,
+            "description": "時間減衰の半減期（日数）。0で無効"
+          }
+        }
+      },
+      "reflection": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "maxMessages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "default": 20000
+          }
+        }
+      },
+      "scopes": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "defaultScope": {
+            "type": "string",
+            "default": "global"
+          },
+          "definitions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "description": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "enableManagementTools": {
+        "type": "boolean",
+        "default": false,
+        "description": "管理・デバッグツール（memory_list, memory_stats）を有効化"
+      }
+    },
+    "required": ["embedding"]
+  },
+  "uiHints": {
+    "embedding.apiKey": {
+      "label": "Embedding APIキー",
+      "sensitive": true,
+      "placeholder": "sk-...",
+      "help": "OpenAI互換のEmbedding APIキー"
+    },
+    "embedding.model": {
+      "label": "埋め込みモデル",
+      "placeholder": "text-embedding-3-small"
+    },
+    "embedding.baseURL": {
+      "label": "ベースURL",
+      "placeholder": "https://api.openai.com/v1",
+      "advanced": true
+    },
+    "dbPath": {
+      "label": "データベースパス",
+      "placeholder": "~/.openclaw/memory/memory-bank",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "自動キャプチャ",
+      "help": "会話の重要情報を自動保存"
+    },
+    "autoRecall": {
+      "label": "自動想起",
+      "help": "関連記憶を自動注入"
+    },
+    "retrieval.rerank": {
+      "label": "リランキング",
+      "help": "cross-encoderで検索精度向上（APIキー必要）",
+      "advanced": true
+    },
+    "reflection.enabled": {
+      "label": "リフレクション",
+      "help": "セッション終了時に学びを自動抽出"
+    },
+    "enableManagementTools": {
+      "label": "管理ツール",
+      "help": "memory_list, memory_statsを有効化",
+      "advanced": true
+    }
+  }
+}

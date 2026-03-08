@@ -1,0 +1,37 @@
+{
+  "name": "memory-bank",
+  "version": "0.1.0",
+  "description": "OpenClaw 長期記憶プラグイン — ハイブリッド検索、スコープ分離、時間減衰、リフレクション",
+  "type": "module",
+  "main": "index.ts",
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "memory",
+    "lancedb",
+    "vector-search",
+    "hybrid-retrieval",
+    "long-term-memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/5dmgmt/memory-bank.git"
+  },
+  "author": "5dmgmt",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "^0.26.2",
+    "openai": "^6.21.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

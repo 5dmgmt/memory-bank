@@ -89,6 +89,7 @@ describe("parseReflectionOutput", () => {
 function createMockEmbedder(vectorMap: Record<string, number[]>): Embedder {
   return {
     dimensions: 3,
+    taskAwareEnabled: false,
     async embed(text: string) {
       return vectorMap[text] || [0, 0, 0];
     },
@@ -123,6 +124,12 @@ function createMockStore(existingEntries: MemoryEntry[]): MemoryStore {
     async listAll() { return []; },
     async count() { return entries.length; },
     async update() { return true; },
+    async existsByTextHash(hash: string, scope: string) {
+      return entries.some((e) => {
+        if (e.scope !== scope) return false;
+        try { return JSON.parse(e.metadata || "{}").textHash === hash; } catch { return false; }
+      });
+    },
   };
 }
 

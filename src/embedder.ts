@@ -98,19 +98,14 @@ export async function validateEndpointDNS(url: string, label: string): Promise<v
   // IP リテラルは同期チェック済み
   if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname) || hostname.includes(":")) return;
 
-  try {
-    const addresses = await lookup(hostname, { all: true });
-    for (const addr of addresses) {
-      if (isPrivateIP(addr.address)) {
-        throw new Error(
-          `memory-bank: ${label} のホスト "${hostname}" がプライベート IP (${addr.address}) に解決されました。SSRF 防止のためブロックします。`,
-        );
-      }
+  // DNS 解決して全 A/AAAA レコードを検証
+  const addresses = await lookup(hostname, { all: true });
+  for (const addr of addresses) {
+    if (isPrivateIP(addr.address)) {
+      throw new Error(
+        `memory-bank: ${label} のホスト "${hostname}" がプライベート IP (${addr.address}) に解決されました。SSRF 防止のためブロックします。`,
+      );
     }
-  } catch (err: any) {
-    // DNS 解決自体の失敗はそのまま throw（ネットワークエラー）
-    if (err?.message?.includes("SSRF")) throw err;
-    // DNS 解決不能はブロックしない（後続の API 呼び出しで自然にエラーになる）
   }
 }
 
@@ -234,8 +229,9 @@ export function createEmbedder(config: EmbedderConfig): Embedder {
   let dnsChecked = false;
   async function ensureDNSSafe(): Promise<void> {
     if (dnsChecked) return;
-    dnsChecked = true;
+    // 検証成功後にフラグをセット（失敗時は次回も再検証）
     await validateEndpointDNS(baseURL, "embedding.baseURL");
+    dnsChecked = true;
   }
 
   async function callApi(texts: string[]): Promise<number[][]> {

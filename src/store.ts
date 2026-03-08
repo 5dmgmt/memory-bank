@@ -71,6 +71,8 @@ export interface MemoryStore {
   listAll(scope: string, limit: number, offset: number): Promise<MemoryEntry[]>;
   count(scope?: string): Promise<number>;
   update(id: string, fields: Partial<Pick<MemoryEntry, "text" | "vector" | "category" | "importance" | "metadata">>): Promise<boolean>;
+  /** metadata 内の textHash で検索（lesson 重複チェック用） */
+  existsByTextHash(hash: string, scope: string): Promise<boolean>;
 }
 
 /**
@@ -272,6 +274,28 @@ export async function createStore(dbPath: string, vectorDim: number): Promise<Me
       if (fields.metadata !== undefined) updateValues.metadata = fields.metadata;
       await table.update({ where: `id = '${sqlEscape(id)}'`, values: updateValues });
       return true;
+    },
+
+    async existsByTextHash(hash, scope) {
+      // metadata カラムに textHash が含まれるか where 句で検索
+      // LanceDB の文字列 LIKE 検索で metadata JSON 内の hash を探す
+      try {
+        const results = await table
+          .query()
+          .select(["id", "metadata"])
+          .where(`scope = '${sqlEscape(scope)}' AND id != '__seed__'`)
+          .limit(100)
+          .toArray();
+        return results.some((row: any) => {
+          try {
+            return JSON.parse(row.metadata || "{}").textHash === hash;
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        return false;
+      }
     },
   };
 }

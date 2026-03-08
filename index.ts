@@ -171,9 +171,17 @@ export default function activate(api: OpenClawPluginApi, _config?: PluginConfig)
       config.autoRecallCategories || ["fact", "lesson", "preference", "decision", "entity", "other"],
     );
 
+    /** autoRecall のクエリ最大文字数（API コスト / DoS 防止） */
+    const maxRecallQueryLength = 1000;
+
     api.on("before_agent_start", async (event: any, ctx: any) => {
-      const prompt = event?.prompt || "";
-      if (typeof prompt !== "string" || prompt.trim().length < minLength) return;
+      const rawPrompt = event?.prompt || "";
+      if (typeof rawPrompt !== "string" || rawPrompt.trim().length < minLength) return;
+
+      // 入力長制限: 巨大プロンプトをそのまま embed しない
+      const prompt = rawPrompt.length > maxRecallQueryLength
+        ? rawPrompt.slice(0, maxRecallQueryLength)
+        : rawPrompt;
 
       try {
         const { retriever, scopeManager: sm } = await initPromise;

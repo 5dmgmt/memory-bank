@@ -189,14 +189,7 @@ export async function extractLessons(
 
       // 重複チェック 2: 同一テキストハッシュが既に保存されていないか
       // （マルチプロセス対策: 別プロセスが同時に保存した場合を検出）
-      try {
-        const existing = await store.searchFullText(hash, scope, 1);
-        if (existing.some((h) => {
-          try { return JSON.parse(h.entry.metadata || "{}").textHash === hash; } catch { return false; }
-        })) continue;
-      } catch {
-        // FTS 検索失敗はスキップ（ベクトル重複チェックで十分）
-      }
+      if (await store.existsByTextHash(hash, scope)) continue;
 
       const id = await store.add({
         text: item.text,

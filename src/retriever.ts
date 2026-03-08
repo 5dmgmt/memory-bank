@@ -38,7 +38,7 @@ export const DEFAULT_CONFIG: RetrievalConfig = {
   mode: "hybrid",
   vectorWeight: 0.7,
   bm25Weight: 0.3,
-  minScore: 0.3,
+  minScore: 0.005,
   rerank: "none",
   rerankModel: "jina-reranker-v2-base-multilingual",
   rerankEndpoint: "https://api.jina.ai/v1/rerank",

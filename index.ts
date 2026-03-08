@@ -74,7 +74,11 @@ function expandPath(p: string): string {
  * プラグイン activate
  * OpenClaw がプラグイン読み込み時に呼び出す
  */
-export default async function activate(api: OpenClawPluginApi, config: PluginConfig) {
+export default async function activate(api: OpenClawPluginApi, _config?: PluginConfig) {
+  const config: PluginConfig = _config || (api as any).pluginConfig;
+  if (!config?.embedding) {
+    throw new Error("memory-bank: embedding config is required. Check plugins.entries.memory-bank.config in openclaw.json");
+  }
   // 1. Embedder 初期化
   const embedder = createEmbedder({
     apiKey: config.embedding.apiKey,
@@ -181,7 +185,22 @@ export default async function activate(api: OpenClawPluginApi, config: PluginCon
           : ["user", "assistant"];
         const conversationSummary = lastMessages
           .filter((m: any) => targetRoles.includes(m.role))
-          .map((m: any) => `${m.role}: ${String(m.content || "").slice(0, 200)}`)
+          .map((m: any) => {
+            const raw = m.content;
+            let text: string;
+            if (typeof raw === "string") {
+              text = raw;
+            } else if (Array.isArray(raw)) {
+              // content blocks 配列 — text 部分だけ結合
+              text = raw
+                .map((b: any) => (typeof b === "string" ? b : b?.text || b?.type || ""))
+                .filter(Boolean)
+                .join(" ");
+            } else {
+              text = JSON.stringify(raw ?? "");
+            }
+            return `${m.role}: ${text.slice(0, 200)}`;
+          })
           .join("\n");
 
         if (conversationSummary.length > 50) {

@@ -73,6 +73,8 @@ export interface MemoryStore {
   update(id: string, fields: Partial<Pick<MemoryEntry, "text" | "vector" | "category" | "importance" | "metadata">>): Promise<boolean>;
   /** metadata 内の textHash で検索（lesson 重複チェック用） */
   existsByTextHash(hash: string, scope: string): Promise<boolean>;
+  /** textHash による重複チェック付き追加（check-then-add を最小ウィンドウで実行） */
+  addIfNotDuplicate(entry: Omit<MemoryEntry, "id" | "timestamp">, textHash: string): Promise<string | null>;
 }
 
 /**
@@ -277,25 +279,71 @@ export async function createStore(dbPath: string, vectorDim: number): Promise<Me
     },
 
     async existsByTextHash(hash, scope) {
-      // metadata カラムに textHash が含まれるか where 句で検索
-      // LanceDB の文字列 LIKE 検索で metadata JSON 内の hash を探す
+      // metadata カラム内の textHash を SQL LIKE で検索（limit なし・全件対象）
+      // hash は sha256 の hex 先頭16文字なので SQL インジェクションリスクなし
+      if (!/^[a-f0-9]{16}$/.test(hash)) return false;
       try {
         const results = await table
           .query()
-          .select(["id", "metadata"])
-          .where(`scope = '${sqlEscape(scope)}' AND id != '__seed__'`)
-          .limit(100)
+          .select(["id"])
+          .where(`scope = '${sqlEscape(scope)}' AND id != '__seed__' AND metadata LIKE '%"textHash":"${hash}"%'`)
+          .limit(1)
           .toArray();
-        return results.some((row: any) => {
-          try {
-            return JSON.parse(row.metadata || "{}").textHash === hash;
-          } catch {
-            return false;
-          }
-        });
+        return results.length > 0;
       } catch {
-        return false;
+        // LIKE 未サポートの場合はフォールバック: 全件スキャン
+        try {
+          const all = await table
+            .query()
+            .select(["id", "metadata"])
+            .where(`scope = '${sqlEscape(scope)}' AND id != '__seed__'`)
+            .toArray();
+          return all.some((row: any) => {
+            try { return JSON.parse(row.metadata || "{}").textHash === hash; } catch { return false; }
+          });
+        } catch {
+          return false;
+        }
       }
+    },
+
+    async addIfNotDuplicate(entry, textHash) {
+      // check-then-add を最小ウィンドウで実行
+      // LanceDB に一意制約がないため完全な原子性は保証できないが、
+      // チェックと追加を連続実行してウィンドウを最小化する
+      const exists = await this.existsByTextHash(textHash, entry.scope);
+      if (exists) return null;
+
+      const id = randomUUID();
+      const row: MemoryEntry = {
+        ...entry,
+        id,
+        timestamp: Date.now(),
+      };
+      await table.add([row]);
+
+      // 追加後に再チェック: 同時に追加された重複があれば自分を削除
+      // （後から追加した方が自主的に退く楽観的制御）
+      try {
+        const duplicates = await table
+          .query()
+          .select(["id"])
+          .where(`scope = '${sqlEscape(entry.scope)}' AND id != '__seed__' AND metadata LIKE '%"textHash":"${sqlEscape(textHash)}"%'`)
+          .toArray();
+        if (duplicates.length > 1) {
+          // 自分のIDが最後に追加されたなら削除（先勝ち）
+          const otherIds = duplicates.filter((r: any) => r.id !== id);
+          if (otherIds.length > 0) {
+            // 他に既にある → 自分を削除
+            await table.delete(`id = '${sqlEscape(id)}'`);
+            return null;
+          }
+        }
+      } catch {
+        // 後追いチェック失敗は無視（最悪でも重複が1件残るだけ）
+      }
+
+      return id;
     },
   };
 }

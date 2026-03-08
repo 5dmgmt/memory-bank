@@ -187,19 +187,18 @@ export async function extractLessons(
       const duplicate = await isDuplicate(vector, store, scope);
       if (duplicate) continue;
 
-      // 重複チェック 2: 同一テキストハッシュが既に保存されていないか
-      // （マルチプロセス対策: 別プロセスが同時に保存した場合を検出）
-      if (await store.existsByTextHash(hash, scope)) continue;
-
-      const id = await store.add({
+      // 重複チェック 2 + 原子的追加: textHash で重複チェックし、なければ追加
+      // マルチプロセス対策: addIfNotDuplicate は追加後にも再チェックし、
+      // 同時追加された重複は後勝ちで自主削除する
+      const id = await store.addIfNotDuplicate({
         text: item.text,
         vector,
         category: item.category,
         scope,
         importance: Math.min(1, Math.max(0, item.importance)),
         metadata: JSON.stringify({ source: "lesson", agentId, textHash: hash }),
-      });
-      ids.push(id);
+      }, hash);
+      if (id) ids.push(id);
     } finally {
       // 一定時間後にロック解除（メモリリーク防止）
       setTimeout(() => inflightLessons.delete(lockKey), 30_000);

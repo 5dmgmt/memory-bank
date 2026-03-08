@@ -130,6 +130,17 @@ function createMockStore(existingEntries: MemoryEntry[]): MemoryStore {
         try { return JSON.parse(e.metadata || "{}").textHash === hash; } catch { return false; }
       });
     },
+    async addIfNotDuplicate(entry, textHash) {
+      // モック: existsByTextHash + add の統合
+      const exists = entries.some((e) => {
+        if (e.scope !== entry.scope) return false;
+        try { return JSON.parse(e.metadata || "{}").textHash === textHash; } catch { return false; }
+      });
+      if (exists) return null;
+      const id = `mock-id-${addCount++}`;
+      entries.push({ ...entry, id, timestamp: Date.now() });
+      return id;
+    },
   };
 }
 
@@ -295,10 +306,10 @@ describe("extractLessons", () => {
     });
     const addedEntries: any[] = [];
     const store = createMockStore([]);
-    const origAdd = store.add.bind(store);
-    store.add = async (entry) => {
+    const origAddIfNot = store.addIfNotDuplicate.bind(store);
+    store.addIfNotDuplicate = async (entry, textHash) => {
       addedEntries.push(entry);
-      return origAdd(entry);
+      return origAddIfNot(entry, textHash);
     };
 
     const items = [

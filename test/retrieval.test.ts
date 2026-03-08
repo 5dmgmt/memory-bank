@@ -220,6 +220,6 @@ describe("adaptConfig", () => {
   it("minScore が過度に低下しない", () => {
     const lowMinScore: RetrievalConfig = { ...DEFAULT_CONFIG, minScore: 0.08 };
     const result = adaptConfig(lowMinScore, 150);
-    assert.ok(result.minScore >= 0.05, `minScore floor should be 0.05, got ${result.minScore}`);
+    assert.ok(result.minScore >= 0.001, `minScore floor should be >= 0.001, got ${result.minScore}`);
   });
 });

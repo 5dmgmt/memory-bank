@@ -189,6 +189,14 @@ export function registerCoreTools(api: OpenClawPluginApi, lazyDeps: ToolDeps | L
       const deps = await getDeps(ctx);
       const id = String(params.id || "").trim();
       if (!id) return toolResult({ error: "IDが指定されていません" });
+
+      // スコープACLチェック: 対象記憶のスコープにアクセス権があるか確認
+      const entry = await deps.store.getById(id);
+      if (!entry) return toolResult({ error: "記憶が見つかりません", id });
+      if (deps.agentId && !deps.scopeManager.canAccess(deps.agentId, entry.scope)) {
+        return toolResult({ error: `アクセス拒否: エージェント "${deps.agentId}" はスコープ "${entry.scope}" にアクセスできません` });
+      }
+
       const deleted = await deps.store.remove(id);
       return toolResult({ deleted, id });
     },
@@ -227,6 +235,13 @@ export function registerCoreTools(api: OpenClawPluginApi, lazyDeps: ToolDeps | L
       const deps = await getDeps(ctx);
       const id = String(params.id || "").trim();
       if (!id) return toolResult({ error: "IDが指定されていません" });
+
+      // スコープACLチェック: 対象記憶のスコープにアクセス権があるか確認
+      const existing = await deps.store.getById(id);
+      if (!existing) return toolResult({ error: "記憶が見つかりません", id });
+      if (deps.agentId && !deps.scopeManager.canAccess(deps.agentId, existing.scope)) {
+        return toolResult({ error: `アクセス拒否: エージェント "${deps.agentId}" はスコープ "${existing.scope}" にアクセスできません` });
+      }
 
       const fields: any = {};
       if (params.text) {
@@ -302,8 +317,15 @@ export function registerManagementTools(api: OpenClawPluginApi, lazyDeps: ToolDe
         scope: { type: "string", description: "スコープ（省略時は全体）" },
       },
     },
-    async execute(_id: string, params: any) {
+    async execute(_id: string, params: any, ctx?: any) {
       const deps = await getDeps();
+      const agentId = ctx?.agentId;
+
+      // スコープACLチェック
+      if (params.scope && agentId && !deps.scopeManager.canAccess(agentId, params.scope)) {
+        return toolResult({ error: `アクセス拒否` });
+      }
+
       const total = await deps.store.count();
       const scopeCount = params.scope
         ? await deps.store.count(params.scope)

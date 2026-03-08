@@ -9,6 +9,21 @@ import { existsSync, mkdirSync, accessSync, constants } from "node:fs";
 /** scope / id に使える文字を制限（SQLインジェクション防止） */
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9_:@.\-\u3000-\u9fff\uff00-\uffef]+$/;
 
+/**
+ * SQL フィルター文字列のサニタイズ（エクスポート用）
+ * SAFE_IDENTIFIER にマッチしない場合はシングルクォートエスケープ + 危険文字除去
+ */
+export function sqlEscape(s: string): string {
+  if (SAFE_IDENTIFIER.test(s)) return s;
+  // バックスラッシュ、セミコロン、ダブルダッシュ、括弧を除去し、シングルクォートをエスケープ
+  return s
+    .replace(/\\/g, "")
+    .replace(/;/g, "")
+    .replace(/--/g, "")
+    .replace(/[()]/g, "")
+    .replace(/'/g, "''");
+}
+
 // LanceDB は動的インポート（ネイティブモジュールのため）
 let lancedbModule: typeof import("@lancedb/lancedb") | null = null;
 
@@ -118,14 +133,6 @@ export async function createStore(dbPath: string, vectorDim: number): Promise<Me
     }
   }
 
-  function sqlEscape(s: string): string {
-    if (!SAFE_IDENTIFIER.test(s)) {
-      // 安全な文字以外はシングルクォートエスケープ + バックスラッシュ除去
-      return s.replace(/\\/g, "").replace(/'/g, "''");
-    }
-    return s;
-  }
-
   return {
     async add(entry) {
       const id = randomUUID();
@@ -216,13 +223,17 @@ export async function createStore(dbPath: string, vectorDim: number): Promise<Me
     },
 
     async listAll(scope, limit, offset) {
+      // offset + limit の上限を制限してメモリ枯渇を防止
+      const maxTotal = 1000;
+      const safeOffset = Math.min(offset, maxTotal);
+      const safeLimit = Math.min(limit, maxTotal - safeOffset);
       const results = await table
         .query()
         .where(`scope = '${sqlEscape(scope)}' AND id != '__seed__'`)
-        .limit(limit + offset)
+        .limit(safeLimit + safeOffset)
         .toArray();
 
-      return results.slice(offset).map((row: any) => ({
+      return results.slice(safeOffset).map((row: any) => ({
         id: row.id,
         text: row.text,
         vector: row.vector,
@@ -238,9 +249,14 @@ export async function createStore(dbPath: string, vectorDim: number): Promise<Me
       const filter = scope
         ? `scope = '${sqlEscape(scope)}' AND id != '__seed__'`
         : "id != '__seed__'";
-      // ベクトルをロードせずIDのみ取得してカウント
-      const results = await table.query().select(["id"]).where(filter).toArray();
-      return results.length;
+      // countRows が使えればそちらを使い、メモリ消費を抑える
+      try {
+        return await table.countRows(filter);
+      } catch {
+        // fallback: IDのみ取得してカウント
+        const results = await table.query().select(["id"]).where(filter).toArray();
+        return results.length;
+      }
     },
 
     async update(id, fields) {

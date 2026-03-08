@@ -185,8 +185,10 @@ export async function extractLessons(
  * リフレクションの JSON 出力をパース（堅牢に）
  */
 export function parseReflectionOutput(output: string): ReflectionItem[] {
+  // 入力サイズ制限（ReDoS防止 + JSON.parse メモリ制限）
+  const truncated = output.length > 50000 ? output.slice(0, 50000) : output;
   // JSON配列を探す
-  const jsonMatch = output.match(/\[[\s\S]*?\]/);
+  const jsonMatch = truncated.match(/\[[\s\S]*?\]/);
   if (!jsonMatch) return [];
 
   try {

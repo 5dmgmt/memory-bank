@@ -5,6 +5,7 @@
  */
 
 import type { MemoryEntry } from "./src/store.ts";
+import { sqlEscape } from "./src/store.ts";
 
 const TABLE_NAME = "memories";
 
@@ -72,7 +73,7 @@ function rowToEntry(row: any): MemoryEntry {
 async function queryAll(table: Awaited<ReturnType<typeof openTable>>, scope?: string, limit?: number): Promise<MemoryEntry[]> {
   let filter = "id != '__seed__'";
   if (scope) {
-    filter += ` AND scope = '${scope}'`;
+    filter += ` AND scope = '${sqlEscape(scope)}'`;
   }
   let q = table.query().where(filter);
   if (limit) {
@@ -167,7 +168,7 @@ async function cmdInspect(flags: Record<string, string>, positional: string[]): 
   }
 
   const table = await openTable(resolveDbPath(flags));
-  const rows = await table.query().where(`id = '${id}'`).limit(1).toArray();
+  const rows = await table.query().where(`id = '${sqlEscape(id)}'`).limit(1).toArray();
 
   if (rows.length === 0) {
     console.error(`Memory not found: ${id}`);

@@ -6,6 +6,7 @@
 
 import type { MemoryStore, SearchHit, MemoryEntry } from "./store.js";
 import type { Embedder } from "./embedder.js";
+import { validateEndpointURL } from "./embedder.js";
 
 export interface RetrievalConfig {
   mode: "hybrid" | "vector";
@@ -244,7 +245,7 @@ export function adaptConfig(
       ...base,
       vectorWeight: Math.min(base.vectorWeight + 0.15, 1),
       bm25Weight: Math.max(base.bm25Weight - 0.15, 0),
-      minScore: Math.max(base.minScore - 0.1, 0.05),
+      minScore: base.minScore * 0.5,
     };
   }
 
@@ -260,7 +261,18 @@ export function createRetriever(
   embedder: Embedder,
   userConfig: Partial<RetrievalConfig> = {},
 ): MemoryRetriever {
-  const config: RetrievalConfig = { ...DEFAULT_CONFIG, ...userConfig };
+  // config のマージ — 既知のキーのみ取り込む（プロトタイプ汚染防止 #10）
+  const config: RetrievalConfig = { ...DEFAULT_CONFIG };
+  for (const key of Object.keys(DEFAULT_CONFIG) as (keyof RetrievalConfig)[]) {
+    if (Object.prototype.hasOwnProperty.call(userConfig, key)) {
+      (config as any)[key] = userConfig[key];
+    }
+  }
+
+  // SSRF防止: rerankEndpoint のバリデーション
+  if (config.rerankEndpoint !== DEFAULT_CONFIG.rerankEndpoint) {
+    validateEndpointURL(config.rerankEndpoint, "retrieval.rerankEndpoint");
+  }
 
   return {
     async recall(query: string, scope: string, limit: number): Promise<RetrievalResult[]> {

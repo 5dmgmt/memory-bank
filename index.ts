@@ -10,7 +10,7 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { createEmbedder } from "./src/embedder.js";
 import { createStore } from "./src/store.js";
@@ -69,13 +69,23 @@ interface PluginConfig {
 }
 
 /**
- * dbPath のチルダ展開
+ * dbPath のチルダ展開 + パストラバーサル防止
  */
 function expandPath(p: string): string {
+  let expanded: string;
   if (p.startsWith("~/") || p === "~") {
-    return join(homedir(), p.slice(2));
+    expanded = join(homedir(), p.slice(2));
+  } else {
+    expanded = p;
   }
-  return p;
+  // 正規化してトラバーサルを解決
+  const resolved = resolve(expanded);
+  // ホームディレクトリ配下のみ許可
+  const home = homedir();
+  if (!resolved.startsWith(home)) {
+    throw new Error(`memory-bank: dbPath はホームディレクトリ配下のみ指定可能です: ${resolved}`);
+  }
+  return resolved;
 }
 
 /**
@@ -121,9 +131,9 @@ export default function activate(api: OpenClawPluginApi, _config?: PluginConfig)
     return { store, embedder, retriever, scopeManager };
   })();
 
-  // 初期化エラーをログに出す（握りつぶさない）
+  // 初期化エラーをログに出す（APIキー等を含む可能性があるため message のみ）
   initPromise.catch((err) => {
-    console.error("[memory-bank] initialization failed:", err);
+    console.error("[memory-bank] initialization failed:", err instanceof Error ? err.message : String(err));
   });
 
   // ツール登録 — ツールファクトリ内で initPromise を await する
@@ -200,9 +210,12 @@ export default function activate(api: OpenClawPluginApi, _config?: PluginConfig)
   }
 
   // リフレクション — agent_end フック（同期登録、内部で await）
-  const reflectionConfig = {
-    ...DEFAULT_REFLECTION_CONFIG,
-    ...(config.reflection || {}),
+  // reflection config — 既知キーのみマージ（プロトタイプ汚染防止）
+  const userReflection = config.reflection || {};
+  const reflectionConfig: typeof DEFAULT_REFLECTION_CONFIG = {
+    enabled: typeof userReflection.enabled === "boolean" ? userReflection.enabled : DEFAULT_REFLECTION_CONFIG.enabled,
+    maxMessages: typeof userReflection.maxMessages === "number" ? userReflection.maxMessages : DEFAULT_REFLECTION_CONFIG.maxMessages,
+    timeoutMs: typeof userReflection.timeoutMs === "number" ? userReflection.timeoutMs : DEFAULT_REFLECTION_CONFIG.timeoutMs,
   };
 
   if (reflectionConfig.enabled) {
@@ -267,7 +280,7 @@ export default function activate(api: OpenClawPluginApi, _config?: PluginConfig)
           }
         }
       } catch (e) {
-        console.warn("[memory-bank] Reflection failed:", e);
+        console.warn("[memory-bank] Reflection failed:", e instanceof Error ? e.message : String(e));
       }
     });
   }

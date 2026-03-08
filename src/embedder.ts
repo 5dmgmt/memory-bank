@@ -7,6 +7,35 @@
 import OpenAI from "openai";
 import { createHash } from "node:crypto";
 
+/**
+ * SSRF防止: URL がプライベートネットワークを指していないか検証
+ */
+export function validateEndpointURL(url: string, label: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`memory-bank: ${label} の URL が不正です: ${url}`);
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  // localhost は開発用途（Ollama等）で許可
+  // 169.254.x.x（リンクローカル）とクラウドメタデータエンドポイントをブロック
+  const blocked = [
+    /^169\.254\./,         // リンクローカル（AWS/GCP メタデータ）
+    /^10\./,               // RFC1918
+    /^172\.(1[6-9]|2\d|3[01])\./,  // RFC1918
+    /^192\.168\./,         // RFC1918
+    /^\[?::1\]?$/,         // IPv6 loopback
+    /^\[?fe80:/i,          // IPv6 リンクローカル
+    /^metadata\.google\.internal$/i,
+  ];
+  for (const pattern of blocked) {
+    if (pattern.test(hostname)) {
+      throw new Error(`memory-bank: ${label} にプライベートアドレスは指定できません: ${hostname}`);
+    }
+  }
+}
+
 // ベクトル次元数のルックアップテーブル
 const KNOWN_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -109,9 +138,13 @@ export function applyTaskPrefix(text: string, model: string, task: EmbedTask, en
  * Embedder を生成
  */
 export function createEmbedder(config: EmbedderConfig): Embedder {
+  const baseURL = config.baseURL || "https://api.openai.com/v1";
+  // SSRF防止: プライベートネットワークへのリクエストをブロック（localhost は Ollama 用に許可）
+  validateEndpointURL(baseURL, "embedding.baseURL");
+
   const client = new OpenAI({
     apiKey: config.apiKey,
-    baseURL: config.baseURL || "https://api.openai.com/v1",
+    baseURL,
   });
 
   const model = config.model || "text-embedding-3-small";

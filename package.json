@@ -37,6 +37,7 @@
   },
   "scripts": {
     "test": "node --import jiti/register --test test/*.test.ts",
-    "cli": "node --import jiti/register cli.ts"
+    "cli": "node --import jiti/register cli.ts",
+    "obsidian-sync": "node --import jiti/register cli.ts obsidian-export --db ~/.openclaw/memory/memory-bank --vault <YOUR_VAULT_PATH>/openclaw/memories"
   }
 }

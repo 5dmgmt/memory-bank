@@ -201,6 +201,78 @@ npm run cli -- import     # インポート
 
 ---
 
+## Obsidian Integration
+
+### Visualize your memories in Obsidian
+
+Memory Bank can export all stored memories as Markdown files with YAML frontmatter, making them browsable and queryable in [Obsidian](https://obsidian.md/) with the [Dataview](https://github.com/blacksmithgu/obsidian-dataview) plugin.
+
+#### Quick Start
+
+```bash
+# One-off export
+npm run cli -- obsidian-export \
+  --db ~/.openclaw/memory/memory-bank \
+  --vault ~/path/to/obsidian-vault/memories
+
+# Or use the built-in shortcut (edit paths in package.json first)
+npm run obsidian-sync
+```
+
+This generates:
+- **Category files** (`preference.md`, `fact.md`, `decision.md`, etc.) — memories grouped by category
+- **`all.md`** — every memory in a single file
+- **`_index.md`** — statistics: total count, per-category breakdown, last sync timestamp
+
+Each memory entry includes Dataview-compatible frontmatter:
+
+```yaml
+---
+id: abc-123
+category: decision
+scope: global
+importance: 0.9
+date: 2026-03-27
+tags: [decision, global]
+---
+```
+
+#### Dataview Queries
+
+With the [Dataview](https://github.com/blacksmithgu/obsidian-dataview) plugin installed, you can query memories directly in Obsidian:
+
+```dataview
+TABLE text, importance, scope
+FROM "openclaw/memories"
+WHERE category = "decision"
+SORT importance DESC
+```
+
+```dataview
+TABLE text, date, category
+FROM "openclaw/memories"
+WHERE importance >= 0.8
+SORT date DESC
+```
+
+#### Recommended Obsidian Plugins
+
+- **[Dataview](https://github.com/blacksmithgu/obsidian-dataview)** — query and filter memories using SQL-like syntax
+- **[Tasks](https://github.com/obsidian-tasks-group/obsidian-tasks)** — track action items extracted from decision memories
+
+#### Automatic Sync with Cron
+
+To keep your Obsidian vault in sync, set up a cron job:
+
+```bash
+# Sync every hour
+crontab -e
+# Add:
+0 * * * * cd /path/to/memory-bank && npm run obsidian-sync >> /tmp/memory-bank-sync.log 2>&1
+```
+
+---
+
 ## 技術的な注意点
 
 ### activate は同期関数

@@ -4,6 +4,8 @@
  * read-only 操作のみ
  */
 
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { MemoryEntry } from "./src/store.ts";
 import { sqlEscape } from "./src/store.ts";
 
@@ -106,7 +108,7 @@ function formatTimestamp(ts: number): string {
 }
 
 export function printHelp(): void {
-  console.log(`memory-bank CLI — メモリストア管理ツール (read-only)
+  console.log(`memory-bank CLI — メモリストア管理ツール
 
 Usage:
   memory-bank <command> [options]
@@ -116,6 +118,7 @@ Commands:
   list [--scope <scope>] [--limit <n>]  記憶一覧（テキスト200文字切り詰め）
   inspect <id>                   特定IDの記憶の全フィールド表示
   export [--scope <scope>] [--format json]  JSON形式でエクスポート
+  obsidian-export --vault <path> Obsidian保管庫にMarkdownエクスポート
   help                           このヘルプを表示
 
 Global options:
@@ -197,6 +200,95 @@ async function cmdExport(flags: Record<string, string>): Promise<void> {
   console.log(JSON.stringify(output, null, 2));
 }
 
+// ── Obsidian Export ──
+
+function entryToMarkdown(entry: MemoryEntry): string {
+  const date = new Date(entry.timestamp).toISOString().slice(0, 10);
+  const title = entry.text.slice(0, 50).replace(/\n/g, " ");
+  return `---
+id: ${entry.id}
+category: ${entry.category}
+scope: ${entry.scope}
+importance: ${entry.importance}
+date: ${date}
+tags: [${entry.category}, ${entry.scope}]
+---
+
+# ${title}
+
+${entry.text}
+`;
+}
+
+async function cmdObsidianExport(flags: Record<string, string>): Promise<void> {
+  const vaultPath = flags["vault"];
+  if (!vaultPath) {
+    console.error("Error: --vault <path> is required for obsidian-export.");
+    process.exit(1);
+  }
+
+  const table = await openTable(resolveDbPath(flags));
+  const entries = await queryAll(table);
+
+  if (entries.length === 0) {
+    console.log("No memories found to export.");
+    return;
+  }
+
+  // Ensure vault directory exists
+  if (!existsSync(vaultPath)) {
+    mkdirSync(vaultPath, { recursive: true });
+  }
+
+  // Group by category
+  const byCategory = new Map<string, MemoryEntry[]>();
+  for (const entry of entries) {
+    const cat = entry.category || "other";
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat)!.push(entry);
+  }
+
+  // Write category files
+  for (const [category, catEntries] of byCategory) {
+    const content = catEntries.map(entryToMarkdown).join("\n---\n\n");
+    writeFileSync(join(vaultPath, `${category}.md`), content, "utf-8");
+    console.log(`  ${category}.md — ${catEntries.length} entries`);
+  }
+
+  // Write all.md
+  const allContent = entries.map(entryToMarkdown).join("\n---\n\n");
+  writeFileSync(join(vaultPath, "all.md"), allContent, "utf-8");
+  console.log(`  all.md — ${entries.length} entries`);
+
+  // Write _index.md
+  const now = new Date().toISOString();
+  const categoryStats = [...byCategory.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([cat, arr]) => `| ${cat} | ${arr.length} |`)
+    .join("\n");
+
+  const indexContent = `---
+last_sync: ${now}
+total: ${entries.length}
+---
+
+# Memory Bank Index
+
+**Total memories:** ${entries.length}
+**Last sync:** ${now}
+
+## Categories
+
+| Category | Count |
+|----------|-------|
+${categoryStats}
+`;
+  writeFileSync(join(vaultPath, "_index.md"), indexContent, "utf-8");
+  console.log(`  _index.md`);
+
+  console.log(`\nExported ${entries.length} memories to ${vaultPath}`);
+}
+
 // ── メインエントリ ──
 
 async function main(): Promise<void> {
@@ -214,6 +306,9 @@ async function main(): Promise<void> {
       break;
     case "export":
       await cmdExport(flags);
+      break;
+    case "obsidian-export":
+      await cmdObsidianExport(flags);
       break;
     case "help":
     case "":

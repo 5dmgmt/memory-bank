@@ -219,40 +219,72 @@ npm run cli -- obsidian-export \
 npm run obsidian-sync
 ```
 
-This generates:
-- **Category files** (`preference.md`, `fact.md`, `decision.md`, etc.) — memories grouped by category
-- **`all.md`** — every memory in a single file
-- **`_index.md`** — statistics: total count, per-category breakdown, last sync timestamp
+This generates **one file per memory** in Japanese category folders:
 
-Each memory entry includes Dataview-compatible frontmatter:
+```
+memories/
+├── _index.md          # Statistics & Dataview queries
+├── 決定事項/          # Decisions & rules
+│   ├── 2026-03-10_Claude_Code_2アカウント運用.md
+│   └── ...
+├── 知識・事実/        # Facts & technical info
+├── 好み・スタイル/    # Preferences & style rules
+└── 気づき・教訓/      # Lessons learned
+```
+
+Each file includes Dataview-compatible YAML frontmatter (Japanese keys):
 
 ```yaml
 ---
 id: abc-123
-category: decision
-scope: global
-importance: 0.9
-date: 2026-03-27
-tags: [decision, global]
+カテゴリ: 決定事項
+スコープ: グローバル
+重要度: 0.9
+日付: 2026-03-27
+タグ: [決定事項, グローバル]
 ---
 ```
+
+> **Filtering:** By default, `reflection` category entries are filtered to `importance >= 0.85` to keep only high-value memories. Adjust with `--min-reflection-importance 0.7`.
+
+#### Organizing by Person
+
+If your agent serves multiple people, you can organize memories by person after export:
+
+```
+memories/
+├── PersonA/
+│   ├── 決定事項/
+│   └── 知識・事実/
+├── PersonB/
+│   └── 好み・スタイル/
+└── 共有/
+    └── 決定事項/
+```
+
+#### Tracking What You Learn
+
+When your agent learns something new, record it in Obsidian with the file path:
+
+> "Saved to: `memories/PersonA/知識・事実/2026-03-28_rule.md`"
+
+This makes memories traceable — both the agent and the human know where knowledge lives.
 
 #### Dataview Queries
 
 With the [Dataview](https://github.com/blacksmithgu/obsidian-dataview) plugin installed, you can query memories directly in Obsidian:
 
 ```dataview
-TABLE text, importance, scope
+TABLE 重要度, 日付, スコープ
 FROM "openclaw/memories"
-WHERE category = "decision"
-SORT importance DESC
+SORT 日付 DESC
+LIMIT 20
 ```
 
 ```dataview
-TABLE text, date, category
-FROM "openclaw/memories"
-WHERE importance >= 0.8
-SORT date DESC
+TABLE 重要度, 日付
+FROM "openclaw/memories/決定事項"
+SORT 重要度 DESC
 ```
 
 #### Recommended Obsidian Plugins
@@ -265,10 +297,10 @@ SORT date DESC
 To keep your Obsidian vault in sync, set up a cron job:
 
 ```bash
-# Sync every hour
+# Sync daily at 8 AM
 crontab -e
 # Add:
-0 * * * * cd /path/to/memory-bank && npm run obsidian-sync >> /tmp/memory-bank-sync.log 2>&1
+5 8 * * * cd /path/to/memory-bank && npm run cli -- obsidian-export --db ~/.openclaw/memory/memory-bank --vault <YOUR_VAULT_PATH>/memories >> /tmp/memory-bank-sync.log 2>&1
 ```
 
 ---

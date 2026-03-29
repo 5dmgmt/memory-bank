@@ -197,6 +197,12 @@
           }
         }
       },
+      "markdownSearchPaths": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": [],
+        "description": "recall検索に含めるMarkdownファイル/ディレクトリパス（MEMORY.md、Obsidianフォルダ等）"
+      },
       "enableManagementTools": {
         "type": "boolean",
         "default": false,

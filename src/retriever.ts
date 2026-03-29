@@ -2,11 +2,15 @@
  * ハイブリッド検索エンジン
  * ベクトル検索 + BM25 を RRF（Reciprocal Rank Fusion）で統合
  * MMR による多様性制御、length normalization、Cross-Encoder リランキング
+ * Phase 2: Markdown ファイル検索統合
  */
 
 import type { MemoryStore, SearchHit, MemoryEntry } from "./store.js";
 import type { Embedder } from "./embedder.js";
 import { validateEndpointURL, validateEndpointDNS } from "./embedder.js";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join, extname } from "node:path";
+import { existsSync } from "node:fs";
 
 export interface RetrievalConfig {
   mode: "hybrid" | "vector";
@@ -280,6 +284,190 @@ export function adaptConfig(
   return base;
 }
 
+// --- Markdown ファイル検索 ---
+
+interface MdFileCache {
+  mtime: number;
+  paragraphs: { text: string; importance: number }[];
+}
+
+const mdCache = new Map<string, MdFileCache>();
+
+/** YAML frontmatter から重要度を抽出 (デフォルト 0.5) */
+function parseImportance(content: string): number {
+  const m = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!m) return 0.5;
+  const im = m[1].match(/(?:importance|重要度)\s*:\s*(\d+(?:\.\d+)?)/);
+  return im ? Math.min(1, Math.max(0, parseFloat(im[1]))) : 0.5;
+}
+
+/** ファイルをフロントマター除去後に段落単位で分割 */
+function splitParagraphs(content: string): string[] {
+  // フロントマター除去
+  const body = content.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, "");
+  // 空行区切りで段落分割、見出し行は区切りにも使う
+  return body
+    .split(/\n{2,}|\n(?=#{1,6}\s)/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 10);
+}
+
+/** 再帰的に .md ファイルを列挙 */
+async function listMarkdownFiles(dirOrFile: string): Promise<string[]> {
+  if (!existsSync(dirOrFile)) return [];
+  const s = await stat(dirOrFile);
+  if (s.isFile()) {
+    return extname(dirOrFile) === ".md" ? [dirOrFile] : [];
+  }
+  if (!s.isDirectory()) return [];
+  const entries = await readdir(dirOrFile, { withFileTypes: true });
+  const results: string[] = [];
+  for (const e of entries) {
+    const full = join(dirOrFile, e.name);
+    if (e.isDirectory()) {
+      results.push(...(await listMarkdownFiles(full)));
+    } else if (e.isFile() && extname(e.name) === ".md") {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+/** キーワードマッチスコアを計算 */
+function keywordScore(text: string, keywords: string[]): number {
+  const lower = text.toLowerCase();
+  let matched = 0;
+  let totalOccurrences = 0;
+  for (const kw of keywords) {
+    if (!kw) continue;
+    const kwLower = kw.toLowerCase();
+    let idx = 0;
+    let count = 0;
+    while ((idx = lower.indexOf(kwLower, idx)) !== -1) {
+      count++;
+      idx += kwLower.length;
+    }
+    if (count > 0) {
+      matched++;
+      totalOccurrences += count;
+    }
+  }
+  if (matched === 0) return 0;
+  // マッチしたキーワード割合 × (1 + log(出現回数))
+  const keywordRatio = matched / keywords.length;
+  return keywordRatio * (1 + Math.log(totalOccurrences));
+}
+
+/**
+ * Markdown ファイル検索
+ * paths 配下の .md ファイルをキーワードマッチで検索し、RetrievalResult[] を返す
+ */
+export async function searchMarkdownFiles(
+  query: string,
+  paths: string[],
+  limit: number,
+): Promise<RetrievalResult[]> {
+  if (paths.length === 0) return [];
+
+  // クエリをキーワードに分割（日本語はそのまま部分一致、英語はスペース区切り）
+  const keywords = query
+    .split(/[\s　,、。.]+/)
+    .filter((k) => k.length >= 2);
+  if (keywords.length === 0) return [];
+
+  // 全パスからファイル列挙
+  const allFiles: string[] = [];
+  for (const p of paths) {
+    allFiles.push(...(await listMarkdownFiles(p)));
+  }
+
+  const candidates: RetrievalResult[] = [];
+
+  for (const filePath of allFiles) {
+    const s = await stat(filePath);
+    const mtime = s.mtimeMs;
+
+    // キャッシュチェック
+    let cached = mdCache.get(filePath);
+    if (!cached || cached.mtime !== mtime) {
+      const content = await readFile(filePath, "utf-8");
+      const importance = parseImportance(content);
+      const paragraphs = splitParagraphs(content).map((text) => ({
+        text,
+        importance,
+      }));
+      cached = { mtime, paragraphs };
+      mdCache.set(filePath, cached);
+    }
+
+    // 段落単位でスコアリング
+    for (const para of cached.paragraphs) {
+      const score = keywordScore(para.text, keywords);
+      if (score <= 0) continue;
+
+      const importanceBonus = (para.importance - 0.5) * 0.05;
+      const finalScore = score + importanceBonus;
+
+      candidates.push({
+        entry: {
+          id: `file://${filePath}#${para.text.slice(0, 40)}`,
+          text: para.text,
+          vector: [],
+          category: "other",
+          scope: "global",
+          importance: para.importance,
+          timestamp: mtime,
+          metadata: JSON.stringify({ source: "file", path: filePath }),
+        },
+        score: finalScore,
+        sources: ["file"],
+      });
+    }
+  }
+
+  // スコア降順でソートして上位 limit 件
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.slice(0, limit);
+}
+
+/**
+ * LanceDB 結果にファイル検索結果をマージ（重複除去、上位 limit 件）
+ * ファイル結果のスコアは LanceDB スコアと桁が異なるため正規化して合算
+ */
+async function mergeFileResults(
+  lanceResults: RetrievalResult[],
+  query: string,
+  mdPaths: string[],
+  limit: number,
+): Promise<RetrievalResult[]> {
+  if (mdPaths.length === 0) return lanceResults;
+
+  const fileResults = await searchMarkdownFiles(query, mdPaths, limit);
+  if (fileResults.length === 0) return lanceResults;
+
+  // ファイル結果のスコアを LanceDB 結果のスコアレンジに正規化
+  const maxLance = lanceResults.length > 0 ? lanceResults[0].score : 0.5;
+  const maxFile = fileResults[0].score;
+  const normFactor = maxFile > 0 ? maxLance / maxFile : 1;
+
+  // 既存IDセットで重複検出
+  const seenTexts = new Set(lanceResults.map((r) => r.entry.text.slice(0, 100)));
+  const merged = [...lanceResults];
+
+  for (const fr of fileResults) {
+    const textKey = fr.entry.text.slice(0, 100);
+    if (seenTexts.has(textKey)) continue;
+    seenTexts.add(textKey);
+    merged.push({
+      ...fr,
+      score: fr.score * normFactor,
+    });
+  }
+
+  merged.sort((a, b) => b.score - a.score);
+  return merged.slice(0, limit);
+}
+
 /**
  * Retriever を生成
  */
@@ -287,6 +475,7 @@ export function createRetriever(
   store: MemoryStore,
   embedder: Embedder,
   userConfig: Partial<RetrievalConfig> = {},
+  markdownSearchPaths: string[] = [],
 ): MemoryRetriever {
   // config のマージ — 既知のキーのみ取り込む（プロトタイプ汚染防止 #10）
   const config: RetrievalConfig = { ...DEFAULT_CONFIG };
@@ -343,6 +532,8 @@ export function createRetriever(
           } else {
             results = results.slice(0, limit);
           }
+          // ファイル検索結果をマージ
+          results = await mergeFileResults(results, query, markdownSearchPaths, limit);
           return results;
         }
       }
@@ -412,6 +603,9 @@ export function createRetriever(
       } else {
         results = results.slice(0, limit);
       }
+
+      // 8. ファイル検索結果をマージ
+      results = await mergeFileResults(results, query, markdownSearchPaths, limit);
 
       return results;
     },

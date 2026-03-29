@@ -66,6 +66,7 @@ interface PluginConfig {
     definitions?: Record<string, { description?: string }>;
     agentAccess?: Record<string, string[]>;
   };
+  markdownSearchPaths?: string[];
   enableManagementTools?: boolean;
 }
 
@@ -148,7 +149,16 @@ export default function activate(api: OpenClawPluginApi, _config?: PluginConfig)
   const initPromise: Promise<PluginDeps> = (async () => {
     const dbPath = expandPath(config.dbPath || "~/.openclaw/memory/memory-bank");
     const store = await createStore(dbPath, embedder.dimensions);
-    const retriever = createRetriever(store, embedder, config.retrieval);
+
+    // Markdown 検索パスを展開（チルダ → ホームディレクトリ）
+    const mdPaths = (config.markdownSearchPaths || []).map((p) => {
+      if (p.startsWith("~/") || p === "~") {
+        return join(homedir(), p.slice(2));
+      }
+      return resolve(p);
+    });
+
+    const retriever = createRetriever(store, embedder, config.retrieval, mdPaths);
     return { store, embedder, retriever, scopeManager };
   })();
 
